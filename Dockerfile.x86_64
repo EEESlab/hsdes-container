@@ -1,0 +1,139 @@
+#
+# Stage 1: building GVSOC & PULP GCC on non-Linux platforms
+#
+FROM ubuntu:24.04 AS builder
+RUN apt update && apt upgrade -y
+ENV TZ=Europe/Rome
+
+# install deps
+RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends --allow-unauthenticated \
+build-essential \
+git \
+doxygen \
+python3-pip \
+libsdl2-dev \
+curl \
+cmake \
+gtkwave \
+libsndfile1-dev \
+rsync \
+autoconf \
+automake \
+texinfo \
+libtool \
+pkg-config \
+libsdl2-ttf-dev
+
+# install deps (GCC)
+RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends --allow-unauthenticated \
+autotools-dev \
+libmpc-dev \
+libmpfr-dev \
+libgmp-dev \
+gawk \
+bison \
+flex \
+gperf \
+patchutils \
+bc \
+zlib1g-dev
+
+# # Set the locale, because Vivado crashes otherwise
+# ENV LANG=en_US.UTF-8
+# ENV LANGUAGE=en_US:en
+# ENV LC_ALL=en_US.UTF-8
+
+WORKDIR /app/
+
+# install GVSOC
+RUN git clone https://github.com/gvsoc/gvsoc
+RUN cd gvsoc
+RUN cd gvsoc; git submodule update --init --recursive
+RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends --allow-unauthenticated python3.12-venv
+RUN python3 -m venv gvsoc-venv
+ENV PATH="/app/gvsoc-venv/bin:$PATH"
+RUN cd gvsoc; pip install -r core/requirements.txt
+RUN cd gvsoc; pip install -r gapy/requirements.txt
+RUN cd gvsoc; make all TARGETS=pulp-open
+ENV PATH="/app/gvsoc/install/bin:$PATH"
+
+# install GCC
+RUN git clone --recursive https://github.com/pulp-platform/pulp-riscv-gnu-toolchain
+RUN cd pulp-riscv-gnu-toolchain; ./configure --prefix=/app/riscv-gcc --with-arch=rv32imc --with-cmodel=medlow --enable-multilib
+RUN cd pulp-riscv-gnu-toolchain; make
+
+# # install SDK (different version of GVSOC!)
+# RUN git clone --recursive https://github.com/pulp-platform/pulp-sdk
+# RUN cd pulp-sdk; . configs/pulp-open.sh; make build
+
+#
+# Stage 2: running GVSOC & PULP GCC
+#
+FROM ubuntu:24.04
+RUN apt update && apt upgrade -y
+ENV TZ=Europe/Rome
+
+WORKDIR /app
+
+COPY --from=builder /app/gvsoc /app/gvsoc
+COPY --from=builder /app/gvsoc-venv /app/gvsoc-venv
+COPY --from=builder /app/riscv-gcc /app/riscv-gcc
+
+SHELL ["/bin/bash", "-c"] 
+
+ENV PATH="/app/gvsoc-venv/bin:$PATH"
+ENV PATH="/app/riscv-gcc/bin:$PATH"
+
+# install deps
+RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends --allow-unauthenticated \
+python3-pip \
+libtool \
+build-essential \
+git \
+doxygen \
+libsdl2-dev \
+curl \
+cmake \
+gtkwave \
+libsndfile1-dev \
+rsync \
+autoconf \
+automake \
+texinfo \
+pkg-config \
+libsdl2-ttf-dev
+
+# install SDK (different version of GVSOC!)
+RUN git clone --recursive https://github.com/pulp-platform/pulp-sdk
+# patch SDK to use new GVSOC
+RUN sed -i '312,313d' /app/pulp-sdk/rtos/pulpos/common/rules/pulpos/default_rules.mk
+# source SDK when entering the docker environment
+RUN echo ". /app/pulp-sdk/configs/pulp-open.sh" >> /etc/bash.bashrc
+
+# # fix fugly bug in pre-built gen-debug-info distributed with GVSOC
+# RUN apt-get update
+# RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends --allow-unauthenticated \
+# binutils-dev \
+# libiberty-dev \
+# valgrind \
+# gdb
+# RUN cd /app/gvsoc/gapy/gen-debug-info-src; \
+#   cmake -S . -B BUILD/ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/app/gvsoc/gapy/bin; \
+#   cd BUILD; make; make install; cp gen-debug-info ../../bin
+# RUN cp /app/gvsoc/gapy/bin/gen-debug-info /app/gvsoc/install/bin/gen-debug-info
+
+# update GVSOC with GDB fixes
+RUN cd /app/gvsoc; git remote add fconti https://github.com/FrancescoConti/gvsoc;
+RUN cd /app/gvsoc; git fetch --all; git checkout b3925e2; git submodule update --init --recursive
+RUN cd /app/gvsoc; make all TARGETS=pulp-open
+# prepend GVSOC path to SDK one
+RUN echo "export PATH=/app/gvsoc/install/bin:$PATH" >> /etc/bash.bashrc
+
+# add local user
+RUN useradd -ms /bin/bash pulp
+USER pulp
+
+# prepare environment
+ENV PULP_RISCV_GCC_TOOLCHAIN=/app/riscv-gcc
+ENV PATH="/app/gvsoc/install/bin:$PATH"
+ENTRYPOINT [ "/bin/bash" ]
