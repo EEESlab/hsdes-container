@@ -110,6 +110,25 @@ RUN sed -i '312,313d' /app/pulp-sdk/rtos/pulpos/common/rules/pulpos/default_rule
 # source SDK when entering the docker environment
 RUN echo ". /app/pulp-sdk/configs/pulp-open.sh" >> /etc/bash.bashrc
 
+# fix fugly bug in pre-built gen-debug-info distributed with GVSOC
+RUN apt-get update
+RUN DEBIAN_FRONTEND=noninteractive apt install -y --no-install-recommends --allow-unauthenticated \
+binutils-dev \
+libiberty-dev \
+valgrind \
+gdb
+RUN cd /app/gvsoc/gapy/gen-debug-info-src; \
+  cmake -S . -B BUILD/ -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_INSTALL_PREFIX=/app/gvsoc/gapy/bin; \
+  cd BUILD; make; make install; cp gen-debug-info ../../bin
+RUN cp /app/gvsoc/gapy/bin/gen-debug-info /app/gvsoc/install/bin/gen-debug-info
+
+# update GVSOC with GDB fixes
+RUN cd /app/gvsoc; git remote add fconti https://github.com/FrancescoConti/gvsoc;
+RUN cd /app/gvsoc; git fetch --all; git checkout b3925e2; git submodule update --init --recursive
+RUN cd /app/gvsoc; make all TARGETS=pulp-open
+# prepend GVSOC path to SDK one
+RUN echo "export PATH=/app/gvsoc/install/bin:$PATH" >> /etc/bash.bashrc
+
 # add local user
 RUN useradd -ms /bin/bash pulp
 USER pulp
