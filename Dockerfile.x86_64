@@ -124,7 +124,7 @@ RUN echo ". /app/pulp-sdk/configs/pulp-open.sh" >> /etc/bash.bashrc
 
 # update GVSOC with GDB fixes
 RUN cd /app/gvsoc; git remote add fconti https://github.com/FrancescoConti/gvsoc;
-RUN cd /app/gvsoc; git fetch --all; git checkout b3925e2; git submodule update --init --recursive
+RUN cd /app/gvsoc; git fetch --all; git checkout 893afc9; git submodule update --init --recursive
 RUN cd /app/gvsoc; make all TARGETS=pulp-open
 # prepend GVSOC path to SDK one
 RUN echo "export PATH=/app/gvsoc/install/bin:$PATH" >> /etc/bash.bashrc
